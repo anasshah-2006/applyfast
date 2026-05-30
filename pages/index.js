@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { supabase } from "../lib/supabase";
 
 const steps = ["Your CV", "Job Details", "Results"];
 
@@ -34,16 +35,32 @@ export default function Home() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [isWide, setIsWide] = useState(false);
+  const [user, setUser] = useState(null);
+  const [generations, setGenerations] = useState(0);
+  const FREE_LIMIT = 3;
 
   useEffect(() => {
-    const check = () => setIsWide(window.innerWidth > 600);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) loadGenerations(session.user.id);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) loadGenerations(session.user.id);
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
+  const loadGenerations = async (userId) => {
+    const { data } = await supabase.from("profiles").select("generations_used").eq("id", userId).single();
+    if (data) setGenerations(data.generations_used || 0);
+  };
+
   const generate = async () => {
+    if (!user && generations >= FREE_LIMIT) {
+      window.location.href = "/login";
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -56,10 +73,31 @@ export default function Home() {
       if (data.error) throw new Error(data.error);
       setResult(data);
       setStep(2);
+      if (user) {
+        await supabase.from("profiles").upsert({ id: user.id, email: user.email, generations_used: generations + 1 });
+        setGenerations(g => g + 1);
+      } else {
+        const newCount = generations + 1;
+        setGenerations(newCount);
+        localStorage.setItem("generations", newCount);
+      }
     } catch (e) {
       setError("Something went wrong. Please try again.");
     }
     setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!user) {
+      const saved = localStorage.getItem("generations");
+      if (saved) setGenerations(parseInt(saved));
+    }
+  }, [user]);
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setGenerations(0);
   };
 
   return (
@@ -76,7 +114,6 @@ export default function Home() {
         .scroll::-webkit-scrollbar-thumb { background: #e8ff0044; }
       `}</style>
 
-      {/* Header */}
       <header style={{ borderBottom: "1px solid #1a1a1a", padding: "1.25rem 2rem", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#0a0a0a", zIndex: 100 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 32, height: 32, background: "#e8ff00", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -84,27 +121,33 @@ export default function Home() {
           </div>
           <span style={{ fontFamily: "Bebas Neue, sans-serif", fontSize: 22, letterSpacing: 3, color: "#e8e8e0" }}>BOOST CV AI</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {steps.map((s, i) => (
-            <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 24, height: 24, borderRadius: "50%", background: i < step ? "#e8ff00" : i === step ? "#e8ff0022" : "transparent", border: `1px solid ${i <= step ? "#e8ff00" : "#333"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: i < step ? "#0a0a0a" : i === step ? "#e8ff00" : "#555", fontWeight: 700, transition: "all 0.3s" }}>
-                {i < step ? "✓" : i + 1}
-              </div>
-              {isWide && <span style={{ fontSize: 11, color: i === step ? "#e8e8e0" : "#444", letterSpacing: 1 }}>{s.toUpperCase()}</span>}
-              {i < steps.length - 1 && <div style={{ width: 16, height: 1, background: i < step ? "#e8ff00" : "#222", marginLeft: 4 }} />}
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          {!user && (
+            <span style={{ fontSize: 11, color: "#555", letterSpacing: 1 }}>
+              {FREE_LIMIT - generations} free {FREE_LIMIT - generations === 1 ? "generation" : "generations"} left
+            </span>
+          )}
+          {user ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 11, color: "#555" }}>{user.email}</span>
+              <button onClick={signOut} style={{ background: "transparent", border: "1px solid #222", color: "#555", borderRadius: 6, padding: "6px 14px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", letterSpacing: 1, textTransform: "uppercase" }}>Sign out</button>
             </div>
-          ))}
+          ) : (
+            <button onClick={() => window.location.href = "/login"}
+              style={{ background: "#e8ff00", color: "#0a0a0a", border: "none", borderRadius: 6, padding: "8px 18px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", letterSpacing: 1, textTransform: "uppercase" }}>
+              Sign in
+            </button>
+          )}
         </div>
       </header>
 
       <main style={{ maxWidth: 760, margin: "0 auto", padding: "3rem 1.5rem" }}>
 
-        {/* Step 0 */}
         {step === 0 && (
           <div className="fade-up">
             <div style={{ marginBottom: "2.5rem" }}>
               <div style={{ display: "inline-block", border: "1px solid #e8ff0044", borderRadius: 4, padding: "4px 12px", marginBottom: "1.5rem" }}>
-                <span style={{ fontSize: 11, color: "#e8ff00", letterSpacing: 2, textTransform: "uppercase" }}>AI-Powered — Free to Try</span>
+                <span style={{ fontSize: 11, color: "#e8ff00", letterSpacing: 2, textTransform: "uppercase" }}>AI-Powered — {user ? "Unlimited" : `${FREE_LIMIT - generations} free left`}</span>
               </div>
               <h1 style={{ fontFamily: "Bebas Neue, sans-serif", fontSize: "clamp(2.5rem, 8vw, 5rem)", lineHeight: 0.95, letterSpacing: 2, marginBottom: "1rem" }}>
                 Land the job.<br />
@@ -132,7 +175,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* Step 1 */}
         {step === 1 && !loading && (
           <div className="fade-up">
             <div style={{ border: "1px solid #1a1a1a", borderRadius: 12, overflow: "hidden" }}>
@@ -155,20 +197,30 @@ export default function Home() {
                 placeholder="Paste the full job description here — the more detail, the better the output."
                 style={{ width: "100%", minHeight: 220, background: "#0d0d0d", border: "none", padding: "1.5rem", color: "#ccc", fontSize: 13, lineHeight: 1.9, fontFamily: "inherit", borderBottom: "1px solid #1a1a1a" }} />
               {error && <div style={{ padding: "0.75rem 1.5rem", background: "#1a0a0a", borderBottom: "1px solid #2a1a1a" }}><span style={{ fontSize: 13, color: "#f44336" }}>{error}</span></div>}
-              <div style={{ padding: "1rem 1.5rem", display: "flex", justifyContent: "space-between" }}>
-                <button onClick={() => setStep(0)} style={{ background: "transparent", color: "#555", border: "1px solid #222", borderRadius: 6, padding: "12px 24px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", letterSpacing: 2, textTransform: "uppercase" }}>← Back</button>
-                <button onClick={() => jobDesc.trim() ? generate() : null}
-                  style={{ background: jobDesc.trim() ? "#e8ff00" : "#1a1a1a", color: jobDesc.trim() ? "#0a0a0a" : "#444", border: "none", borderRadius: 6, padding: "12px 32px", fontSize: 12, fontWeight: 700, cursor: jobDesc.trim() ? "pointer" : "not-allowed", fontFamily: "inherit", letterSpacing: 2, textTransform: "uppercase", transition: "all 0.2s" }}>
-                  Generate ✦
-                </button>
-              </div>
+
+              {!user && generations >= FREE_LIMIT ? (
+                <div style={{ padding: "1.5rem", textAlign: "center", background: "#0d0d0d" }}>
+                  <p style={{ color: "#e8ff00", fontSize: 13, marginBottom: 12, letterSpacing: 1 }}>You've used your 3 free generations</p>
+                  <button onClick={() => window.location.href = "/login"}
+                    style={{ background: "#e8ff00", color: "#0a0a0a", border: "none", borderRadius: 6, padding: "12px 32px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", letterSpacing: 2, textTransform: "uppercase" }}>
+                    Sign up to continue free →
+                  </button>
+                </div>
+              ) : (
+                <div style={{ padding: "1rem 1.5rem", display: "flex", justifyContent: "space-between" }}>
+                  <button onClick={() => setStep(0)} style={{ background: "transparent", color: "#555", border: "1px solid #222", borderRadius: 6, padding: "12px 24px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", letterSpacing: 2, textTransform: "uppercase" }}>← Back</button>
+                  <button onClick={() => jobDesc.trim() ? generate() : null}
+                    style={{ background: jobDesc.trim() ? "#e8ff00" : "#1a1a1a", color: jobDesc.trim() ? "#0a0a0a" : "#444", border: "none", borderRadius: 6, padding: "12px 32px", fontSize: 12, fontWeight: 700, cursor: jobDesc.trim() ? "pointer" : "not-allowed", fontFamily: "inherit", letterSpacing: 2, textTransform: "uppercase", transition: "all 0.2s" }}>
+                    Generate ✦
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {step === 1 && loading && <Spinner />}
 
-        {/* Step 2 */}
         {step === 2 && result && (
           <div className="fade-up">
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: "2rem" }}>
