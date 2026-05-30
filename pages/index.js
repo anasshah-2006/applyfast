@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 
-const steps = ["Your CV", "Job Details", "Results"];
+const FREE_LIMIT = 3;
 
 function Spinner() {
   return (
@@ -37,17 +37,23 @@ export default function Home() {
   const [error, setError] = useState("");
   const [user, setUser] = useState(null);
   const [generations, setGenerations] = useState(0);
-  const FREE_LIMIT = 3;
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
+    const saved = localStorage.getItem("generations");
+    if (saved) setGenerations(parseInt(saved));
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) loadGenerations(session.user.id);
     });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) loadGenerations(session.user.id);
     });
+
     return () => subscription.unsubscribe();
   }, []);
 
@@ -73,13 +79,12 @@ export default function Home() {
       if (data.error) throw new Error(data.error);
       setResult(data);
       setStep(2);
+      const newCount = generations + 1;
+      setGenerations(newCount);
       if (user) {
-        await supabase.from("profiles").upsert({ id: user.id, email: user.email, generations_used: generations + 1 });
-        setGenerations(g => g + 1);
+        await supabase.from("profiles").upsert({ id: user.id, email: user.email, generations_used: newCount });
       } else {
-        const newCount = generations + 1;
-        setGenerations(newCount);
-        localStorage.setItem("generations", newCount);
+        localStorage.setItem("generations", newCount.toString());
       }
     } catch (e) {
       setError("Something went wrong. Please try again.");
@@ -87,18 +92,17 @@ export default function Home() {
     setLoading(false);
   };
 
-  useEffect(() => {
-    if (!user) {
-      const saved = localStorage.getItem("generations");
-      if (saved) setGenerations(parseInt(saved));
-    }
-  }, [user]);
-
   const signOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
     setGenerations(0);
+    localStorage.removeItem("generations");
   };
+
+  if (!mounted) return null;
+
+  const generationsLeft = FREE_LIMIT - generations;
+  const hitLimit = !user && generations >= FREE_LIMIT;
 
   return (
     <div style={{ minHeight: "100vh", background: "#0a0a0a", color: "#e8e8e0", fontFamily: "'DM Mono', 'Courier New', monospace" }}>
@@ -124,7 +128,7 @@ export default function Home() {
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           {!user && (
             <span style={{ fontSize: 11, color: "#555", letterSpacing: 1 }}>
-              {FREE_LIMIT - generations} free {FREE_LIMIT - generations === 1 ? "generation" : "generations"} left
+              {generationsLeft > 0 ? `${generationsLeft} free left` : "Free limit reached"}
             </span>
           )}
           {user ? (
@@ -147,7 +151,9 @@ export default function Home() {
           <div className="fade-up">
             <div style={{ marginBottom: "2.5rem" }}>
               <div style={{ display: "inline-block", border: "1px solid #e8ff0044", borderRadius: 4, padding: "4px 12px", marginBottom: "1.5rem" }}>
-                <span style={{ fontSize: 11, color: "#e8ff00", letterSpacing: 2, textTransform: "uppercase" }}>AI-Powered — {user ? "Unlimited" : `${FREE_LIMIT - generations} free left`}</span>
+                <span style={{ fontSize: 11, color: "#e8ff00", letterSpacing: 2, textTransform: "uppercase" }}>
+                  {user ? "Unlimited generations" : `${generationsLeft} free generation${generationsLeft !== 1 ? "s" : ""} left`}
+                </span>
               </div>
               <h1 style={{ fontFamily: "Bebas Neue, sans-serif", fontSize: "clamp(2.5rem, 8vw, 5rem)", lineHeight: 0.95, letterSpacing: 2, marginBottom: "1rem" }}>
                 Land the job.<br />
@@ -198,12 +204,13 @@ export default function Home() {
                 style={{ width: "100%", minHeight: 220, background: "#0d0d0d", border: "none", padding: "1.5rem", color: "#ccc", fontSize: 13, lineHeight: 1.9, fontFamily: "inherit", borderBottom: "1px solid #1a1a1a" }} />
               {error && <div style={{ padding: "0.75rem 1.5rem", background: "#1a0a0a", borderBottom: "1px solid #2a1a1a" }}><span style={{ fontSize: 13, color: "#f44336" }}>{error}</span></div>}
 
-              {!user && generations >= FREE_LIMIT ? (
-                <div style={{ padding: "1.5rem", textAlign: "center", background: "#0d0d0d" }}>
-                  <p style={{ color: "#e8ff00", fontSize: 13, marginBottom: 12, letterSpacing: 1 }}>You've used your 3 free generations</p>
+              {hitLimit ? (
+                <div style={{ padding: "2rem", textAlign: "center" }}>
+                  <p style={{ color: "#e8ff00", fontSize: 13, marginBottom: 8, letterSpacing: 1 }}>You've used your 3 free generations</p>
+                  <p style={{ color: "#555", fontSize: 12, marginBottom: 16 }}>Sign up free to keep going</p>
                   <button onClick={() => window.location.href = "/login"}
                     style={{ background: "#e8ff00", color: "#0a0a0a", border: "none", borderRadius: 6, padding: "12px 32px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", letterSpacing: 2, textTransform: "uppercase" }}>
-                    Sign up to continue free →
+                    Sign up free →
                   </button>
                 </div>
               ) : (
